@@ -34,7 +34,6 @@ DEFAULT_SETTINGS = {
     "image_brighten": True,
     "image_contrast": True,
     "image_mirror": False,
-    "auto_save_settings": False,
 }
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
@@ -134,21 +133,10 @@ def current_settings_from_session() -> dict:
         "image_brighten": bool(st.session_state.get("image_brighten", DEFAULT_SETTINGS["image_brighten"])),
         "image_contrast": bool(st.session_state.get("image_contrast", DEFAULT_SETTINGS["image_contrast"])),
         "image_mirror": bool(st.session_state.get("image_mirror", DEFAULT_SETTINGS["image_mirror"])),
-        "auto_save_settings": bool(st.session_state.get("auto_save_settings", DEFAULT_SETTINGS["auto_save_settings"])),
     }
 
 
-def save_current_settings() -> None:
-    SETTINGS_PATH.write_text(
-        json.dumps(current_settings_from_session(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def auto_save_if_enabled() -> None:
-    if not st.session_state.get("auto_save_settings", False):
-        return
-
+def auto_save_settings() -> None:
     current = current_settings_from_session()
     last = st.session_state.get("_last_auto_saved_settings")
     if last == current:
@@ -159,12 +147,6 @@ def auto_save_if_enabled() -> None:
         encoding="utf-8",
     )
     st.session_state["_last_auto_saved_settings"] = current.copy()
-
-
-def reset_settings_to_default() -> None:
-    for key, value in DEFAULT_SETTINGS.items():
-        st.session_state[key] = value
-    safe_delete(SETTINGS_PATH)
 
 
 def check_password() -> bool:
@@ -407,7 +389,7 @@ st.markdown("---")
 
 option_mode = st.selectbox(
     "편집 옵션 열기",
-    ["옵션 숨김", "영상 옵션", "이미지 옵션", "설정 저장"],
+    ["옵션 숨김", "영상 옵션", "이미지 옵션"],
     index=0,
 )
 
@@ -439,37 +421,7 @@ elif option_mode == "이미지 옵션":
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
-elif option_mode == "설정 저장":
-    with st.container(border=True):
-        st.subheader("⚙️ 설정 저장")
-        st.caption("크롭값과 체크박스 옵션을 저장합니다. 공유 앱에서는 모든 사용자가 같은 저장값을 사용합니다.")
-
-        st.checkbox("설정 자동 저장", key="auto_save_settings")
-
-        col_save, col_reset = st.columns(2)
-
-        with col_save:
-            if st.button("현재 설정 저장", use_container_width=True):
-                save_current_settings()
-                st.session_state["settings_saved_message"] = True
-                st.rerun()
-
-        with col_reset:
-            if st.button("기본값 복원", use_container_width=True):
-                reset_settings_to_default()
-                st.session_state["settings_reset_message"] = True
-                st.rerun()
-
-        if st.session_state.get("auto_save_settings", False):
-            st.info("자동 저장 켜짐: 옵션을 바꾸면 자동으로 저장됩니다.")
-
-if st.session_state.pop("settings_saved_message", False):
-    st.success("설정 저장 완료")
-
-if st.session_state.pop("settings_reset_message", False):
-    st.success("기본값으로 복원했습니다.")
-
-auto_save_if_enabled()
+auto_save_settings()
 
 settings = current_settings_from_session()
 
