@@ -4,11 +4,9 @@ import json
 import uuid
 import subprocess
 import zipfile
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import streamlit as st
-import extra_streamlit_components as stx
 from PIL import Image, ImageEnhance
 
 st.set_page_config(page_title="쓰레드 세탁기", page_icon="🧺", layout="centered")
@@ -21,15 +19,6 @@ MAX_TOTAL_FILES = int(st.secrets.get("MAX_TOTAL_FILES", 10))
 WORKDIR = Path("work")
 WORKDIR.mkdir(exist_ok=True)
 
-COOKIE_NAME = "ume_auth"
-COOKIE_EXPIRY_DAYS = 30
-
-def _pw_hash(pwd: str) -> str:
-    return hashlib.sha256(pwd.encode()).hexdigest()
-
-def _cookie_manager():
-    return stx.CookieManager(key="ume_cookie_manager")
-
 SETTINGS_PATH = WORKDIR / "editor_settings.json"
 
 DEFAULT_SETTINGS = {
@@ -37,9 +26,9 @@ DEFAULT_SETTINGS = {
     "trim_tail": 0.5,
     "video_crop_top": 15,
     "video_crop_bottom": 10,
-    "mute": True,
-    "mirror": False,
     "brighten_video": False,
+    "mirror": False,
+    "mute": True,
     "image_crop_top": 10,
     "image_crop_bottom": 5,
     "image_brighten": True,
@@ -50,6 +39,10 @@ DEFAULT_SETTINGS = {
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _pw_hash(pwd: str) -> str:
+    return hashlib.sha256(pwd.encode("utf-8")).hexdigest()
 
 
 def cleanup_old_work_files() -> None:
@@ -133,15 +126,15 @@ def current_settings_from_session() -> dict:
         "trim_tail": float(st.session_state.get("trim_tail", DEFAULT_SETTINGS["trim_tail"])),
         "video_crop_top": int(st.session_state.get("video_crop_top", DEFAULT_SETTINGS["video_crop_top"])),
         "video_crop_bottom": int(st.session_state.get("video_crop_bottom", DEFAULT_SETTINGS["video_crop_bottom"])),
-        "mute": bool(st.session_state.get("mute", DEFAULT_SETTINGS["mute"])),
-        "mirror": bool(st.session_state.get("mirror", DEFAULT_SETTINGS["mirror"])),
         "brighten_video": bool(st.session_state.get("brighten_video", DEFAULT_SETTINGS["brighten_video"])),
+        "mirror": bool(st.session_state.get("mirror", DEFAULT_SETTINGS["mirror"])),
+        "mute": bool(st.session_state.get("mute", DEFAULT_SETTINGS["mute"])),
         "image_crop_top": int(st.session_state.get("image_crop_top", DEFAULT_SETTINGS["image_crop_top"])),
         "image_crop_bottom": int(st.session_state.get("image_crop_bottom", DEFAULT_SETTINGS["image_crop_bottom"])),
         "image_brighten": bool(st.session_state.get("image_brighten", DEFAULT_SETTINGS["image_brighten"])),
         "image_contrast": bool(st.session_state.get("image_contrast", DEFAULT_SETTINGS["image_contrast"])),
         "image_mirror": bool(st.session_state.get("image_mirror", DEFAULT_SETTINGS["image_mirror"])),
-        "auto_save_settings": bool(st.session_state.get("auto_save_settings", DEFAULT_SETTINGS.get("auto_save_settings", False))),
+        "auto_save_settings": bool(st.session_state.get("auto_save_settings", DEFAULT_SETTINGS["auto_save_settings"])),
     }
 
 
@@ -175,25 +168,16 @@ def reset_settings_to_default() -> None:
 
 
 def check_password() -> bool:
-    cm = _cookie_manager()
-
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
-    # URL 토큰 자동 로그인: 모바일에서 쿠키 유지가 불안정할 때 대비
+    token = _pw_hash(APP_PASSWORD)
+
+    # URL 토큰 자동 로그인: 모바일 홈화면/북마크 유지용
     if not st.session_state["password_correct"]:
         try:
             auth_token = st.query_params.get("auth")
-            if auth_token and auth_token == _pw_hash(APP_PASSWORD):
-                st.session_state["password_correct"] = True
-        except Exception:
-            pass
-
-    # 쿠키 자동 로그인
-    if not st.session_state["password_correct"]:
-        try:
-            cookie_val = cm.get(COOKIE_NAME)
-            if cookie_val and cookie_val == _pw_hash(APP_PASSWORD):
+            if auth_token and hmac.compare_digest(str(auth_token), token):
                 st.session_state["password_correct"] = True
         except Exception:
             pass
@@ -203,25 +187,16 @@ def check_password() -> bool:
 
     st.title("🔒 쓰레드 세탁기")
     st.caption("비밀번호를 입력하세요.")
+
     pwd = st.text_input("비밀번호", type="password")
-    remember = st.checkbox("로그인 상태 유지 (30일)")
+    remember = st.checkbox("로그인 상태 유지")
     if remember:
-        st.caption("현재 기기에서 로그인 유지됩니다. 로그인 유지된 주소는 다른 사람에게 공유하지 마세요.")
-    if st.button("접속"):
+        st.caption("로그인 후 현재 주소를 홈화면/북마크에 저장하세요. 이 주소는 다른 사람에게 공유하지 마세요.")
+
+    if st.button("접속", use_container_width=True):
         if hmac.compare_digest(str(pwd), APP_PASSWORD):
             st.session_state["password_correct"] = True
             if remember:
-                token = _pw_hash(APP_PASSWORD)
-                try:
-                    cm.set(
-                        COOKIE_NAME,
-                        token,
-                        expires_at=datetime.now() + timedelta(days=COOKIE_EXPIRY_DAYS),
-                    )
-                except Exception:
-                    pass
-
-                # 모바일 브라우저에서 쿠키가 유지되지 않는 경우를 대비해 현재 URL에도 로그인 토큰 저장
                 try:
                     st.query_params["auth"] = token
                 except Exception:
@@ -229,6 +204,7 @@ def check_password() -> bool:
             st.rerun()
         else:
             st.error("비밀번호가 일치하지 않습니다.")
+
     return False
 
 
@@ -256,7 +232,6 @@ def safe_stem(filename: str) -> str:
 
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in stem)
     safe = safe.strip("_")
-
     return safe[:60] if safe else "file"
 
 
@@ -268,6 +243,7 @@ def process_video_ffmpeg(input_path: Path, output_path: Path, settings: dict) ->
     can_trim = duration > (trim_head + trim_tail + 0.5)
     start = trim_head if can_trim else 0.0
     out_duration = duration - start - (trim_tail if can_trim else 0.0)
+
     if out_duration <= 0:
         raise RuntimeError("편집 후 영상 길이가 0초 이하입니다. 자르기 값을 줄이세요.")
 
@@ -277,10 +253,11 @@ def process_video_ffmpeg(input_path: Path, output_path: Path, settings: dict) ->
     crop_y = crop_top / 100
 
     filters = [f"crop=w=iw:h=ih*{remain_ratio:.6f}:x=0:y=ih*{crop_y:.6f}"]
-    if settings["mirror"]:
-        filters.append("hflip")
+
     if settings["brighten_video"]:
         filters.append("eq=brightness=0.03:contrast=1.02")
+    if settings["mirror"]:
+        filters.append("hflip")
 
     cmd = [
         "ffmpeg", "-y",
@@ -295,17 +272,31 @@ def process_video_ffmpeg(input_path: Path, output_path: Path, settings: dict) ->
     else:
         cmd += ["-c:a", "aac", "-b:a", "128k"]
 
-    cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-movflags", "+faststart", str(output_path)]
+    cmd += [
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+
     run_cmd(cmd)
 
 
 def process_image(uploaded_file, output_path: Path, settings: dict) -> None:
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
     img = Image.open(uploaded_file)
+
     if img.mode != "RGB":
         img = img.convert("RGB")
 
     crop_top = settings["image_crop_top"]
     crop_bottom = settings["image_crop_bottom"]
+
     if crop_top or crop_bottom:
         w, h = img.size
         y1 = int(h * crop_top / 100)
@@ -318,7 +309,7 @@ def process_image(uploaded_file, output_path: Path, settings: dict) -> None:
         img = ImageEnhance.Brightness(img).enhance(1.02)
     if settings["image_contrast"]:
         img = ImageEnhance.Contrast(img).enhance(1.02)
-    if settings.get("image_mirror", False):
+    if settings["image_mirror"]:
         img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
 
     img.save(output_path, format="JPEG", quality=95, optimize=True)
@@ -327,6 +318,7 @@ def process_image(uploaded_file, output_path: Path, settings: dict) -> None:
 def process_one_video(uploaded_file, settings: dict, result_paths: list[Path]) -> Path:
     job_id = uuid.uuid4().hex[:8]
     suffix = get_ext(uploaded_file.name) or ".mp4"
+
     input_path = WORKDIR / f"in_video_{job_id}{suffix}"
     temp_output = WORKDIR / f"out_video_{job_id}.mp4"
     final_path = WORKDIR / f"mixed_result_{job_id}_{safe_stem(uploaded_file.name)}.mp4"
@@ -377,32 +369,6 @@ if "settings_loaded" not in st.session_state:
 st.title("🧺 쓰레드 세탁기")
 st.caption("영상과 이미지를 업로드해서 간단히 정리합니다.")
 
-with st.expander("⚙️ 설정 저장", expanded=False):
-    st.caption("크롭값과 체크박스 옵션을 저장합니다. 저장된 값은 다음 접속 시부터 기본값으로 적용됩니다. 공유 앱에서는 모든 사용자가 같은 저장값을 사용합니다.")
-
-    auto_save_settings = st.checkbox("설정 자동 저장", key="auto_save_settings")
-
-    col_save, col_reset = st.columns(2)
-    with col_save:
-        if st.button("현재 설정 저장", use_container_width=True):
-            save_current_settings()
-            st.session_state["settings_saved_message"] = True
-            st.rerun()
-    with col_reset:
-        if st.button("기본값 복원", use_container_width=True):
-            reset_settings_to_default()
-            st.session_state["settings_reset_message"] = True
-            st.rerun()
-
-    if auto_save_settings:
-        st.info("자동 저장 켜짐: 옵션을 바꾸면 자동으로 저장됩니다.")
-
-if st.session_state.pop("settings_saved_message", False):
-    st.success("설정 저장 완료")
-
-if st.session_state.pop("settings_reset_message", False):
-    st.success("기본값으로 복원했습니다.")
-
 st.caption(
     f"앱 내부 제한: 영상 {MAX_VIDEO_MB}MB 이하 / 이미지 {MAX_IMAGE_MB}MB 이하 / 한 번에 최대 {MAX_TOTAL_FILES}개"
 )
@@ -414,105 +380,141 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    st.success(f"✅ 업로드 완료: {len(uploaded_files)}개 파일")
-    image_preview_count = 0
-    for f in uploaded_files:
-        kind = classify_file(f.name)
-        size_mb = f.size / (1024 * 1024)
-        icon = "📹" if kind == "video" else "🖼️" if kind == "image" else "⚠️"
-        st.write(f"{icon} {f.name} — {size_mb:.1f}MB")
+    with st.container(border=True):
+        st.success(f"✅ 업로드 완료: {len(uploaded_files)}개 파일")
 
-        if kind == "image" and image_preview_count < 3:
-            try:
-                st.image(f, caption=f.name, use_container_width=True)
-                image_preview_count += 1
-            except Exception:
-                pass
+        image_preview_count = 0
+        for f in uploaded_files:
+            kind = classify_file(f.name)
+            size_mb = f.size / (1024 * 1024)
+            icon = "📹" if kind == "video" else "🖼️" if kind == "image" else "⚠️"
+            st.write(f"{icon} {f.name} — {size_mb:.1f}MB")
 
-    st.info("옵션 확인 후 아래의 전체 처리 시작 버튼을 누르세요. 처리 중에는 진행바가 표시됩니다.")
+            if kind == "image" and image_preview_count < 2:
+                try:
+                    f.seek(0)
+                    st.image(f, caption=f.name, use_container_width=True)
+                    f.seek(0)
+                    image_preview_count += 1
+                except Exception:
+                    pass
+
+        st.info("아래에서 옵션을 확인한 뒤 전체 처리 시작을 누르세요.")
 else:
     st.caption("파일을 업로드하면 이 위치에 업로드 완료 표시가 나옵니다.")
 
-with st.expander("📹 영상 옵션", expanded=False):
-    trim_head = st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head")
-    trim_tail = st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail")
-    video_crop_top = st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top")
-    video_crop_bottom = st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom")
-    brighten_video = st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video")
-    mirror = st.checkbox("좌우 반전", key="mirror")
-    mute = st.checkbox("무음 처리", key="mute")
+st.markdown("---")
 
-    if video_crop_top + video_crop_bottom >= 90:
-        st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+option_mode = st.selectbox(
+    "편집 옵션 열기",
+    ["옵션 숨김", "영상 옵션", "이미지 옵션", "설정 저장"],
+    index=0,
+)
 
-with st.expander("🖼️ 이미지 옵션", expanded=False):
-    image_crop_top = st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top")
-    image_crop_bottom = st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom")
-    image_brighten = st.checkbox("이미지 밝기 약간 보정", key="image_brighten")
-    image_contrast = st.checkbox("이미지 보정", key="image_contrast")
-    image_mirror = st.checkbox("이미지 좌우 반전", key="image_mirror")
+if option_mode == "영상 옵션":
+    with st.container(border=True):
+        st.subheader("📹 영상 옵션")
+        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head")
+        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail")
+        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top")
+        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom")
+        st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video")
+        st.checkbox("좌우 반전", key="mirror")
+        st.checkbox("무음 처리", key="mute")
 
-    if image_crop_top + image_crop_bottom >= 90:
-        st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+        s = current_settings_from_session()
+        if s["video_crop_top"] + s["video_crop_bottom"] >= 90:
+            st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+
+elif option_mode == "이미지 옵션":
+    with st.container(border=True):
+        st.subheader("🖼️ 이미지 옵션")
+        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top")
+        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom")
+        st.checkbox("이미지 밝기 약간 보정", key="image_brighten")
+        st.checkbox("이미지 보정", key="image_contrast")
+        st.checkbox("이미지 좌우 반전", key="image_mirror")
+
+        s = current_settings_from_session()
+        if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
+            st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+
+elif option_mode == "설정 저장":
+    with st.container(border=True):
+        st.subheader("⚙️ 설정 저장")
+        st.caption("크롭값과 체크박스 옵션을 저장합니다. 공유 앱에서는 모든 사용자가 같은 저장값을 사용합니다.")
+
+        st.checkbox("설정 자동 저장", key="auto_save_settings")
+
+        col_save, col_reset = st.columns(2)
+
+        with col_save:
+            if st.button("현재 설정 저장", use_container_width=True):
+                save_current_settings()
+                st.session_state["settings_saved_message"] = True
+                st.rerun()
+
+        with col_reset:
+            if st.button("기본값 복원", use_container_width=True):
+                reset_settings_to_default()
+                st.session_state["settings_reset_message"] = True
+                st.rerun()
+
+        if st.session_state.get("auto_save_settings", False):
+            st.info("자동 저장 켜짐: 옵션을 바꾸면 자동으로 저장됩니다.")
+
+if st.session_state.pop("settings_saved_message", False):
+    st.success("설정 저장 완료")
+
+if st.session_state.pop("settings_reset_message", False):
+    st.success("기본값으로 복원했습니다.")
 
 auto_save_if_enabled()
 
-settings = {
-    "trim_head": trim_head,
-    "trim_tail": trim_tail,
-    "video_crop_top": video_crop_top,
-    "video_crop_bottom": video_crop_bottom,
-    "mute": mute,
-    "mirror": mirror,
-    "brighten_video": brighten_video,
-    "image_crop_top": image_crop_top,
-    "image_crop_bottom": image_crop_bottom,
-    "image_brighten": image_brighten,
-    "image_contrast": image_contrast,
-    "image_mirror": image_mirror,
-}
+settings = current_settings_from_session()
+
+st.markdown("---")
 
 if uploaded_files:
-    st.markdown("---")
     st.subheader("처리 준비")
 
     if len(uploaded_files) > MAX_TOTAL_FILES:
         st.error(f"파일은 한 번에 최대 {MAX_TOTAL_FILES}개까지만 처리합니다.")
     else:
-        video_count = image_count = unknown_count = 0
+        video_count = 0
+        image_count = 0
         blocked = False
 
         for f in uploaded_files:
             kind = classify_file(f.name)
             size_mb = f.size / (1024 * 1024)
+
             if kind == "video":
                 video_count += 1
                 if size_mb > MAX_VIDEO_MB:
                     blocked = True
                     st.error(f"📹 {f.name}: 용량 초과 {size_mb:.1f}MB / 최대 {MAX_VIDEO_MB}MB")
-                else:
-                    st.write(f"📹 {f.name} — {size_mb:.1f}MB")
             elif kind == "image":
                 image_count += 1
                 if size_mb > MAX_IMAGE_MB:
                     blocked = True
                     st.error(f"🖼️ {f.name}: 용량 초과 {size_mb:.1f}MB / 최대 {MAX_IMAGE_MB}MB")
-                else:
-                    st.write(f"🖼️ {f.name} — {size_mb:.1f}MB")
             else:
-                unknown_count += 1
                 blocked = True
                 st.error(f"{f.name}: 지원하지 않는 파일 형식")
 
         st.info(f"영상 {video_count}개 / 이미지 {image_count}개")
 
         crop_invalid = (
-            not validate_crop(video_crop_top, video_crop_bottom)
-            or not validate_crop(image_crop_top, image_crop_bottom)
+            not validate_crop(settings["video_crop_top"], settings["video_crop_bottom"])
+            or not validate_crop(settings["image_crop_top"], settings["image_crop_bottom"])
         )
+
         if crop_invalid:
             blocked = True
             st.error("크롭 합계가 너무 큽니다. 영상/이미지 크롭 합계를 각각 90% 미만으로 설정하세요.")
+
+        st.warning("처리 중에는 화면을 끄거나 다른 앱으로 이동하지 마세요. 완료 후 바로 다운로드하세요.")
 
         if st.button("전체 처리 시작", type="primary", disabled=blocked, use_container_width=True):
             result_paths: list[Path] = []
@@ -526,9 +528,11 @@ if uploaded_files:
 
             try:
                 total = len(uploaded_files)
+
                 for idx, f in enumerate(uploaded_files, start=1):
                     kind = classify_file(f.name)
                     percent = int((idx - 1) / total * 100)
+
                     status.info(f"처리 중: {idx}/{total} — {f.name}")
                     count_box.write(f"진행률: {percent}%")
 
@@ -537,6 +541,10 @@ if uploaded_files:
                             process_one_video(f, settings, result_paths)
                             processed_count += 1
                         elif kind == "image":
+                            try:
+                                f.seek(0)
+                            except Exception:
+                                pass
                             process_one_image(f, settings, result_paths)
                             processed_count += 1
                         else:
@@ -554,20 +562,37 @@ if uploaded_files:
 
                 if result_paths:
                     st.success(f"처리 완료: 성공 {processed_count}개 / 실패 {failed_count}개")
+
                     if len(result_paths) == 1:
                         p = result_paths[0]
                         data = p.read_bytes()
+
                         if p.suffix.lower() == ".mp4":
                             st.video(data)
                             mime = "video/mp4"
                         else:
                             st.image(data)
                             mime = "image/jpeg"
-                        st.download_button("결과 파일 다운로드", data=data, file_name=p.name, mime=mime, use_container_width=True)
+
+                        st.download_button(
+                            "결과 파일 다운로드",
+                            data=data,
+                            file_name=p.name,
+                            mime=mime,
+                            use_container_width=True,
+                        )
                     else:
                         zip_bytes = make_zip(result_paths)
-                        st.download_button("결과 ZIP 다운로드", data=zip_bytes, file_name="edited_results.zip", mime="application/zip", use_container_width=True)
+                        st.download_button(
+                            "결과 ZIP 다운로드",
+                            data=zip_bytes,
+                            file_name="edited_results.zip",
+                            mime="application/zip",
+                            use_container_width=True,
+                        )
                 else:
                     st.error("처리된 결과가 없습니다.")
             finally:
                 safe_delete(*result_paths)
+else:
+    st.info("파일을 업로드하면 처리 버튼이 표시됩니다.")
