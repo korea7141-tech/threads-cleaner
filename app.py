@@ -166,7 +166,7 @@ def check_password() -> bool:
     if st.session_state["password_correct"]:
         return True
 
-    st.title("🔒 쓰레드 세타기")
+    st.title("🔒 쓰레드 세탁기")
     st.caption("비밀번호를 입력하세요.")
     pwd = st.text_input("비밀번호", type="password")
     if st.button("접속"):
@@ -318,7 +318,7 @@ if "settings_loaded" not in st.session_state:
     apply_settings_to_session(load_saved_settings())
     st.session_state["settings_loaded"] = True
 
-st.title("🎬 쓰레드 세타기")
+st.title("🎬 쓰레드 세탁기")
 st.caption("영상과 이미지를 따로 또는 같이 업로드해서 처리합니다.")
 
 with st.expander("⚙️ 설정 저장", expanded=False):
