@@ -44,6 +44,7 @@ DEFAULT_SETTINGS = {
     "image_crop_bottom": 5,
     "image_brighten": True,
     "image_contrast": True,
+    "image_mirror": False,
     "auto_save_settings": False,
 }
 
@@ -139,6 +140,7 @@ def current_settings_from_session() -> dict:
         "image_crop_bottom": int(st.session_state.get("image_crop_bottom", DEFAULT_SETTINGS["image_crop_bottom"])),
         "image_brighten": bool(st.session_state.get("image_brighten", DEFAULT_SETTINGS["image_brighten"])),
         "image_contrast": bool(st.session_state.get("image_contrast", DEFAULT_SETTINGS["image_contrast"])),
+        "image_mirror": bool(st.session_state.get("image_mirror", DEFAULT_SETTINGS["image_mirror"])),
         "auto_save_settings": bool(st.session_state.get("auto_save_settings", DEFAULT_SETTINGS.get("auto_save_settings", False))),
     }
 
@@ -178,6 +180,15 @@ def check_password() -> bool:
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
+    # URL 토큰 자동 로그인: 모바일에서 쿠키 유지가 불안정할 때 대비
+    if not st.session_state["password_correct"]:
+        try:
+            auth_token = st.query_params.get("auth")
+            if auth_token and auth_token == _pw_hash(APP_PASSWORD):
+                st.session_state["password_correct"] = True
+        except Exception:
+            pass
+
     # 쿠키 자동 로그인
     if not st.session_state["password_correct"]:
         try:
@@ -194,16 +205,25 @@ def check_password() -> bool:
     st.caption("비밀번호를 입력하세요.")
     pwd = st.text_input("비밀번호", type="password")
     remember = st.checkbox("로그인 상태 유지 (30일)")
+    if remember:
+        st.caption("현재 기기에서 로그인 유지됩니다. 로그인 유지된 주소는 다른 사람에게 공유하지 마세요.")
     if st.button("접속"):
         if hmac.compare_digest(str(pwd), APP_PASSWORD):
             st.session_state["password_correct"] = True
             if remember:
+                token = _pw_hash(APP_PASSWORD)
                 try:
                     cm.set(
                         COOKIE_NAME,
-                        _pw_hash(APP_PASSWORD),
+                        token,
                         expires_at=datetime.now() + timedelta(days=COOKIE_EXPIRY_DAYS),
                     )
+                except Exception:
+                    pass
+
+                # 모바일 브라우저에서 쿠키가 유지되지 않는 경우를 대비해 현재 URL에도 로그인 토큰 저장
+                try:
+                    st.query_params["auth"] = token
                 except Exception:
                     pass
             st.rerun()
@@ -298,6 +318,8 @@ def process_image(uploaded_file, output_path: Path, settings: dict) -> None:
         img = ImageEnhance.Brightness(img).enhance(1.02)
     if settings["image_contrast"]:
         img = ImageEnhance.Contrast(img).enhance(1.02)
+    if settings.get("image_mirror", False):
+        img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
 
     img.save(output_path, format="JPEG", quality=95, optimize=True)
 
@@ -392,36 +414,44 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    st.success(f"업로드 감지됨: {len(uploaded_files)}개 파일")
+    st.success(f"✅ 업로드 완료: {len(uploaded_files)}개 파일")
+    image_preview_count = 0
     for f in uploaded_files:
         kind = classify_file(f.name)
         size_mb = f.size / (1024 * 1024)
         icon = "📹" if kind == "video" else "🖼️" if kind == "image" else "⚠️"
         st.write(f"{icon} {f.name} — {size_mb:.1f}MB")
-    st.caption("옵션 확인 후 아래의 전체 처리 시작 버튼을 누르세요. 처리 중에는 진행바가 표시됩니다.")
+
+        if kind == "image" and image_preview_count < 3:
+            try:
+                st.image(f, caption=f.name, use_container_width=True)
+                image_preview_count += 1
+            except Exception:
+                pass
+
+    st.info("옵션 확인 후 아래의 전체 처리 시작 버튼을 누르세요. 처리 중에는 진행바가 표시됩니다.")
+else:
+    st.caption("파일을 업로드하면 이 위치에 업로드 완료 표시가 나옵니다.")
 
 with st.expander("📹 영상 옵션", expanded=False):
-    col1, col2 = st.columns(2)
-    with col1:
-        trim_head = st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head")
-        video_crop_top = st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top")
-        mute = st.checkbox("무음 처리", key="mute")
-    with col2:
-        trim_tail = st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail")
-        video_crop_bottom = st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom")
-        mirror = st.checkbox("좌우 반전", key="mirror")
+    trim_head = st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head")
+    trim_tail = st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail")
+    video_crop_top = st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top")
+    video_crop_bottom = st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom")
     brighten_video = st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video")
+    mirror = st.checkbox("좌우 반전", key="mirror")
+    mute = st.checkbox("무음 처리", key="mute")
+
     if video_crop_top + video_crop_bottom >= 90:
         st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
 with st.expander("🖼️ 이미지 옵션", expanded=False):
-    col1, col2 = st.columns(2)
-    with col1:
-        image_crop_top = st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top")
-        image_brighten = st.checkbox("이미지 밝기 약간 보정", key="image_brighten")
-    with col2:
-        image_crop_bottom = st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom")
-        image_contrast = st.checkbox("이미지 대비 약간 보정", key="image_contrast")
+    image_crop_top = st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top")
+    image_crop_bottom = st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom")
+    image_brighten = st.checkbox("이미지 밝기 약간 보정", key="image_brighten")
+    image_contrast = st.checkbox("이미지 보정", key="image_contrast")
+    image_mirror = st.checkbox("이미지 좌우 반전", key="image_mirror")
+
     if image_crop_top + image_crop_bottom >= 90:
         st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
@@ -439,6 +469,7 @@ settings = {
     "image_crop_bottom": image_crop_bottom,
     "image_brighten": image_brighten,
     "image_contrast": image_contrast,
+    "image_mirror": image_mirror,
 }
 
 if uploaded_files:
