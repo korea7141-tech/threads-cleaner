@@ -36,6 +36,36 @@ DEFAULT_SETTINGS = {
     "image_mirror": False,
 }
 
+SETTING_KEYS = list(DEFAULT_SETTINGS.keys())
+BOOL_SETTING_KEYS = {"brighten_video", "mirror", "mute", "image_brighten", "image_contrast", "image_mirror"}
+INT_SETTING_KEYS = {"video_crop_top", "video_crop_bottom", "image_crop_top", "image_crop_bottom"}
+FLOAT_SETTING_KEYS = {"trim_head", "trim_tail"}
+
+
+def _setting_query_key(key: str) -> str:
+    return f"s_{key}"
+
+
+def _query_value_to_python(key: str, value):
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    value = str(value)
+
+    if key in BOOL_SETTING_KEYS:
+        return value.lower() in {"1", "true", "yes", "on"}
+    if key in INT_SETTING_KEYS:
+        return int(float(value))
+    if key in FLOAT_SETTING_KEYS:
+        return float(value)
+    return value
+
+
+def _python_value_to_query(value) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -99,18 +129,30 @@ def safe_delete(*paths: Path) -> None:
 
 
 def load_saved_settings() -> dict:
+    merged = DEFAULT_SETTINGS.copy()
+
+    # 1순위: URL에 저장된 설정값
+    try:
+        for key in SETTING_KEYS:
+            qkey = _setting_query_key(key)
+            if qkey in st.query_params:
+                merged[key] = _query_value_to_python(key, st.query_params.get(qkey))
+    except Exception:
+        pass
+
+    # 2순위: 서버 임시 저장 파일
     try:
         if SETTINGS_PATH.exists():
             data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                merged = DEFAULT_SETTINGS.copy()
-                for key in DEFAULT_SETTINGS:
-                    if key in data:
+                for key in SETTING_KEYS:
+                    qkey = _setting_query_key(key)
+                    if qkey not in st.query_params and key in data:
                         merged[key] = data[key]
-                return merged
     except Exception:
         pass
-    return DEFAULT_SETTINGS.copy()
+
+    return merged
 
 
 def apply_settings_to_session(settings: dict) -> None:
@@ -139,14 +181,22 @@ def current_settings_from_session() -> dict:
 def save_settings_if_changed() -> None:
     current = current_settings_from_session()
     last = st.session_state.get("_last_auto_saved_settings")
-    if last == current:
-        return
 
-    SETTINGS_PATH.write_text(
-        json.dumps(current, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    st.session_state["_last_auto_saved_settings"] = current.copy()
+    # 서버 임시 파일 저장
+    if last != current:
+        SETTINGS_PATH.write_text(
+            json.dumps(current, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        st.session_state["_last_auto_saved_settings"] = current.copy()
+        st.session_state["settings_auto_saved_message"] = True
+
+    # URL에도 설정 저장: 모바일 새로고침/재접속 보강
+    try:
+        for key, value in current.items():
+            st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
+    except Exception:
+        pass
 
 
 def check_password() -> bool:
@@ -347,7 +397,7 @@ if not check_password():
 if "settings_loaded" not in st.session_state:
     apply_settings_to_session(load_saved_settings())
     st.session_state["settings_loaded"] = True
-    st.session_state["_last_auto_saved_settings"] = current_settings_from_session().copy()
+st.session_state["_last_auto_saved_settings"] = current_settings_from_session().copy()
 
 st.title("🧺 쓰레드 세탁기")
 st.caption("영상과 이미지를 업로드해서 간단히 정리합니다.")
@@ -392,6 +442,7 @@ option_mode = st.selectbox(
     "편집 옵션 열기",
     ["옵션 숨김", "영상 옵션", "이미지 옵션"],
     index=0,
+    key="option_mode",
 )
 
 if option_mode == "영상 옵션":
@@ -421,6 +472,11 @@ elif option_mode == "이미지 옵션":
         s = current_settings_from_session()
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+
+save_settings_if_changed()
+
+if st.session_state.pop("settings_auto_saved_message", False):
+    st.success("설정 자동 저장됨")
 
 settings = current_settings_from_session()
 
