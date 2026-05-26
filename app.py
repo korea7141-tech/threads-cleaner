@@ -32,6 +32,7 @@ DEFAULT_SETTINGS = {
     "image_crop_bottom": 5,
     "image_brighten": True,
     "image_contrast": True,
+    "auto_save_settings": False,
 }
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
@@ -126,6 +127,7 @@ def current_settings_from_session() -> dict:
         "image_crop_bottom": int(st.session_state.get("image_crop_bottom", DEFAULT_SETTINGS["image_crop_bottom"])),
         "image_brighten": bool(st.session_state.get("image_brighten", DEFAULT_SETTINGS["image_brighten"])),
         "image_contrast": bool(st.session_state.get("image_contrast", DEFAULT_SETTINGS["image_contrast"])),
+        "auto_save_settings": bool(st.session_state.get("auto_save_settings", DEFAULT_SETTINGS.get("auto_save_settings", False))),
     }
 
 
@@ -134,6 +136,22 @@ def save_current_settings() -> None:
         json.dumps(current_settings_from_session(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def auto_save_if_enabled() -> None:
+    if not st.session_state.get("auto_save_settings", False):
+        return
+
+    current = current_settings_from_session()
+    last = st.session_state.get("_last_auto_saved_settings")
+    if last == current:
+        return
+
+    SETTINGS_PATH.write_text(
+        json.dumps(current, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    st.session_state["_last_auto_saved_settings"] = current.copy()
 
 
 def reset_settings_to_default() -> None:
@@ -305,6 +323,9 @@ st.caption("영상과 이미지를 따로 또는 같이 업로드해서 처리�
 
 with st.expander("⚙️ 설정 저장", expanded=False):
     st.caption("크롭값과 체크박스 옵션을 저장합니다. 저장된 값은 다음 접속 시부터 기본값으로 적용됩니다. 공유 앱에서는 모든 사용자가 같은 저장값을 사용합니다.")
+
+    auto_save_settings = st.checkbox("설정 자동 저장", key="auto_save_settings")
+
     col_save, col_reset = st.columns(2)
     with col_save:
         if st.button("현재 설정 저장", use_container_width=True):
@@ -316,6 +337,9 @@ with st.expander("⚙️ 설정 저장", expanded=False):
             reset_settings_to_default()
             st.session_state["settings_reset_message"] = True
             st.rerun()
+
+    if auto_save_settings:
+        st.info("자동 저장 켜짐: 옵션을 바꾸면 자동으로 저장됩니다.")
 
 if st.session_state.pop("settings_saved_message", False):
     st.success("설정 저장 완료")
@@ -333,30 +357,32 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-with st.expander("📹 영상 옵션", expanded=True):
+with st.expander("📹 영상 옵션", expanded=False):
     col1, col2 = st.columns(2)
     with col1:
         trim_head = st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head")
-        video_crop_top = st.slider("영상 상단 크롭(%)", 0, 40, key="video_crop_top")
+        video_crop_top = st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top")
         mute = st.checkbox("무음 처리", key="mute")
     with col2:
         trim_tail = st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail")
-        video_crop_bottom = st.slider("영상 하단 크롭(%)", 0, 40, key="video_crop_bottom")
+        video_crop_bottom = st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom")
         mirror = st.checkbox("좌우 반전", key="mirror")
     brighten_video = st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video")
     if video_crop_top + video_crop_bottom >= 90:
         st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
-with st.expander("🖼️ 이미지 옵션", expanded=True):
+with st.expander("🖼️ 이미지 옵션", expanded=False):
     col1, col2 = st.columns(2)
     with col1:
-        image_crop_top = st.slider("이미지 상단 크롭(%)", 0, 40, key="image_crop_top")
+        image_crop_top = st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top")
         image_brighten = st.checkbox("이미지 밝기 약간 보정", key="image_brighten")
     with col2:
-        image_crop_bottom = st.slider("이미지 하단 크롭(%)", 0, 40, key="image_crop_bottom")
+        image_crop_bottom = st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom")
         image_contrast = st.checkbox("이미지 대비 약간 보정", key="image_contrast")
     if image_crop_top + image_crop_bottom >= 90:
         st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+
+auto_save_if_enabled()
 
 settings = {
     "trim_head": trim_head,
