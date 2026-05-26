@@ -190,11 +190,18 @@ def save_settings_if_changed() -> None:
         )
         st.session_state["_last_auto_saved_settings"] = current.copy()
         st.session_state["settings_auto_saved_message"] = True
+        st.session_state["_url_sync_needed"] = True
 
-    # URL에도 설정 저장: 모바일 새로고침/재접속 보강
+
+def sync_settings_to_url() -> None:
+    """메인 플로우에서만 호출 — on_change 안에서 호출하면 re-run 발생"""
+    if not st.session_state.get("_url_sync_needed"):
+        return
     try:
+        current = current_settings_from_session()
         for key, value in current.items():
             st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
+        st.session_state["_url_sync_needed"] = False
     except Exception:
         pass
 
@@ -474,6 +481,7 @@ elif option_mode == "이미지 옵션":
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
 save_settings_if_changed()
+sync_settings_to_url()
 
 if st.session_state.pop("settings_auto_saved_message", False):
     st.success("설정 자동 저장됨")
