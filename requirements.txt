@@ -1,3 +1,2 @@
 streamlit
 Pillow
-extra-streamlit-components==0.3.6
