@@ -11,7 +11,7 @@ import streamlit as st
 import extra_streamlit_components as stx
 from PIL import Image, ImageEnhance
 
-st.set_page_config(page_title="쓰레드 세타기", page_icon="🎬", layout="centered")
+st.set_page_config(page_title="쓰레드 세탁기", page_icon="🧺", layout="centered")
 
 APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", "1234"))
 MAX_VIDEO_MB = int(st.secrets.get("MAX_VIDEO_MB", 50))
@@ -27,7 +27,6 @@ COOKIE_EXPIRY_DAYS = 30
 def _pw_hash(pwd: str) -> str:
     return hashlib.sha256(pwd.encode()).hexdigest()
 
-@st.cache_resource
 def _cookie_manager():
     return stx.CookieManager(key="ume_cookie_manager")
 
@@ -191,7 +190,7 @@ def check_password() -> bool:
     if st.session_state["password_correct"]:
         return True
 
-    st.title("🔒 쓰레드 세타기")
+    st.title("🔒 쓰레드 세탁기")
     st.caption("비밀번호를 입력하세요.")
     pwd = st.text_input("비밀번호", type="password")
     remember = st.checkbox("로그인 상태 유지 (30일)")
@@ -353,8 +352,8 @@ if "settings_loaded" not in st.session_state:
     apply_settings_to_session(load_saved_settings())
     st.session_state["settings_loaded"] = True
 
-st.title("🎬 쓰레드 세타기")
-st.caption("영상과 이미지를 따로 또는 같이 업로드해서 처리합니다.")
+st.title("🧺 쓰레드 세탁기")
+st.caption("영상과 이미지를 업로드해서 간단히 정리합니다.")
 
 with st.expander("⚙️ 설정 저장", expanded=False):
     st.caption("크롭값과 체크박스 옵션을 저장합니다. 저장된 값은 다음 접속 시부터 기본값으로 적용됩니다. 공유 앱에서는 모든 사용자가 같은 저장값을 사용합니다.")
