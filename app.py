@@ -1,14 +1,17 @@
 import hmac
+import hashlib
 import json
 import uuid
 import subprocess
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import streamlit as st
+import extra_streamlit_components as stx
 from PIL import Image, ImageEnhance
 
-st.set_page_config(page_title="Upload Media Editor", page_icon="🎬", layout="centered")
+st.set_page_config(page_title="쓰레드 세타기", page_icon="🎬", layout="centered")
 
 APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", "1234"))
 MAX_VIDEO_MB = int(st.secrets.get("MAX_VIDEO_MB", 50))
@@ -17,6 +20,16 @@ MAX_TOTAL_FILES = int(st.secrets.get("MAX_TOTAL_FILES", 10))
 
 WORKDIR = Path("work")
 WORKDIR.mkdir(exist_ok=True)
+
+COOKIE_NAME = "ume_auth"
+COOKIE_EXPIRY_DAYS = 30
+
+def _pw_hash(pwd: str) -> str:
+    return hashlib.sha256(pwd.encode()).hexdigest()
+
+@st.cache_resource
+def _cookie_manager():
+    return stx.CookieManager(key="ume_cookie_manager")
 
 SETTINGS_PATH = WORKDIR / "editor_settings.json"
 
@@ -161,17 +174,39 @@ def reset_settings_to_default() -> None:
 
 
 def check_password() -> bool:
+    cm = _cookie_manager()
+
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
+
+    # 쿠키 자동 로그인
+    if not st.session_state["password_correct"]:
+        try:
+            cookie_val = cm.get(COOKIE_NAME)
+            if cookie_val and cookie_val == _pw_hash(APP_PASSWORD):
+                st.session_state["password_correct"] = True
+        except Exception:
+            pass
+
     if st.session_state["password_correct"]:
         return True
 
-    st.title("🔒 쓰레드 세탁기")
+    st.title("🔒 쓰레드 세타기")
     st.caption("비밀번호를 입력하세요.")
     pwd = st.text_input("비밀번호", type="password")
+    remember = st.checkbox("로그인 상태 유지 (30일)")
     if st.button("접속"):
         if hmac.compare_digest(str(pwd), APP_PASSWORD):
             st.session_state["password_correct"] = True
+            if remember:
+                try:
+                    cm.set(
+                        COOKIE_NAME,
+                        _pw_hash(APP_PASSWORD),
+                        expires_at=datetime.now() + timedelta(days=COOKIE_EXPIRY_DAYS),
+                    )
+                except Exception:
+                    pass
             st.rerun()
         else:
             st.error("비밀번호가 일치하지 않습니다.")
@@ -318,7 +353,7 @@ if "settings_loaded" not in st.session_state:
     apply_settings_to_session(load_saved_settings())
     st.session_state["settings_loaded"] = True
 
-st.title("🎬 쓰레드 세탁기")
+st.title("🎬 쓰레드 세타기")
 st.caption("영상과 이미지를 따로 또는 같이 업로드해서 처리합니다.")
 
 with st.expander("⚙️ 설정 저장", expanded=False):
@@ -356,6 +391,15 @@ uploaded_files = st.file_uploader(
     type=["mp4", "mov", "mkv", "webm", "jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True,
 )
+
+if uploaded_files:
+    st.success(f"업로드 감지됨: {len(uploaded_files)}개 파일")
+    for f in uploaded_files:
+        kind = classify_file(f.name)
+        size_mb = f.size / (1024 * 1024)
+        icon = "📹" if kind == "video" else "🖼️" if kind == "image" else "⚠️"
+        st.write(f"{icon} {f.name} — {size_mb:.1f}MB")
+    st.caption("옵션 확인 후 아래의 전체 처리 시작 버튼을 누르세요. 처리 중에는 진행바가 표시됩니다.")
 
 with st.expander("📹 영상 옵션", expanded=False):
     col1, col2 = st.columns(2)
@@ -400,7 +444,7 @@ settings = {
 
 if uploaded_files:
     st.markdown("---")
-    st.subheader("업로드 목록")
+    st.subheader("처리 준비")
 
     if len(uploaded_files) > MAX_TOTAL_FILES:
         st.error(f"파일은 한 번에 최대 {MAX_TOTAL_FILES}개까지만 처리합니다.")
@@ -440,18 +484,24 @@ if uploaded_files:
             blocked = True
             st.error("크롭 합계가 너무 큽니다. 영상/이미지 크롭 합계를 각각 90% 미만으로 설정하세요.")
 
-        if st.button("전체 처리 시작", type="primary", disabled=blocked):
+        if st.button("전체 처리 시작", type="primary", disabled=blocked, use_container_width=True):
             result_paths: list[Path] = []
             processed_count = 0
             failed_count = 0
-            progress = st.progress(0)
+
+            st.markdown("### 진행 상황")
+            progress = st.progress(0, text="처리 대기 중...")
             status = st.empty()
+            count_box = st.empty()
 
             try:
                 total = len(uploaded_files)
                 for idx, f in enumerate(uploaded_files, start=1):
                     kind = classify_file(f.name)
-                    status.write(f"처리 중: {f.name}")
+                    percent = int((idx - 1) / total * 100)
+                    status.info(f"처리 중: {idx}/{total} — {f.name}")
+                    count_box.write(f"진행률: {percent}%")
+
                     try:
                         if kind == "video":
                             process_one_video(f, settings, result_paths)
@@ -464,7 +514,13 @@ if uploaded_files:
                     except Exception as e:
                         failed_count += 1
                         st.error(f"{f.name} 처리 실패: {e}")
-                    progress.progress(idx / total)
+
+                    percent = int(idx / total * 100)
+                    progress.progress(idx / total, text=f"{percent}% 완료")
+                    count_box.write(f"진행률: {percent}%")
+
+                status.success("처리 완료")
+                progress.progress(1.0, text="100% 완료")
 
                 if result_paths:
                     st.success(f"처리 완료: 성공 {processed_count}개 / 실패 {failed_count}개")
