@@ -136,7 +136,7 @@ def current_settings_from_session() -> dict:
     }
 
 
-def auto_save_settings() -> None:
+def save_settings_if_changed() -> None:
     current = current_settings_from_session()
     last = st.session_state.get("_last_auto_saved_settings")
     if last == current:
@@ -347,6 +347,7 @@ if not check_password():
 if "settings_loaded" not in st.session_state:
     apply_settings_to_session(load_saved_settings())
     st.session_state["settings_loaded"] = True
+    st.session_state["_last_auto_saved_settings"] = current_settings_from_session().copy()
 
 st.title("🧺 쓰레드 세탁기")
 st.caption("영상과 이미지를 업로드해서 간단히 정리합니다.")
@@ -396,13 +397,13 @@ option_mode = st.selectbox(
 if option_mode == "영상 옵션":
     with st.container(border=True):
         st.subheader("📹 영상 옵션")
-        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head")
-        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail")
-        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top")
-        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom")
-        st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video")
-        st.checkbox("좌우 반전", key="mirror")
-        st.checkbox("무음 처리", key="mute")
+        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head", on_change=save_settings_if_changed)
+        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail", on_change=save_settings_if_changed)
+        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top", on_change=save_settings_if_changed)
+        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom", on_change=save_settings_if_changed)
+        st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video", on_change=save_settings_if_changed)
+        st.checkbox("좌우 반전", key="mirror", on_change=save_settings_if_changed)
+        st.checkbox("무음 처리", key="mute", on_change=save_settings_if_changed)
 
         s = current_settings_from_session()
         if s["video_crop_top"] + s["video_crop_bottom"] >= 90:
@@ -411,17 +412,15 @@ if option_mode == "영상 옵션":
 elif option_mode == "이미지 옵션":
     with st.container(border=True):
         st.subheader("🖼️ 이미지 옵션")
-        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top")
-        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom")
-        st.checkbox("이미지 밝기 약간 보정", key="image_brighten")
-        st.checkbox("이미지 보정", key="image_contrast")
-        st.checkbox("이미지 좌우 반전", key="image_mirror")
+        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top", on_change=save_settings_if_changed)
+        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom", on_change=save_settings_if_changed)
+        st.checkbox("이미지 밝기 약간 보정", key="image_brighten", on_change=save_settings_if_changed)
+        st.checkbox("이미지 보정", key="image_contrast", on_change=save_settings_if_changed)
+        st.checkbox("이미지 좌우 반전", key="image_mirror", on_change=save_settings_if_changed)
 
         s = current_settings_from_session()
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
-
-auto_save_settings()
 
 settings = current_settings_from_session()
 
