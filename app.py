@@ -1,4 +1,5 @@
 import hmac
+import json
 import uuid
 import subprocess
 import zipfile
@@ -16,6 +17,22 @@ MAX_TOTAL_FILES = int(st.secrets.get("MAX_TOTAL_FILES", 10))
 
 WORKDIR = Path("work")
 WORKDIR.mkdir(exist_ok=True)
+
+SETTINGS_PATH = WORKDIR / "editor_settings.json"
+
+DEFAULT_SETTINGS = {
+    "trim_head": 0.5,
+    "trim_tail": 0.5,
+    "video_crop_top": 15,
+    "video_crop_bottom": 10,
+    "mute": True,
+    "mirror": False,
+    "brighten_video": False,
+    "image_crop_top": 10,
+    "image_crop_bottom": 5,
+    "image_brighten": True,
+    "image_contrast": True,
+}
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -73,6 +90,56 @@ def safe_delete(*paths: Path) -> None:
                 Path(p).unlink()
         except Exception:
             pass
+
+
+def load_saved_settings() -> dict:
+    try:
+        if SETTINGS_PATH.exists():
+            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                merged = DEFAULT_SETTINGS.copy()
+                for key in DEFAULT_SETTINGS:
+                    if key in data:
+                        merged[key] = data[key]
+                return merged
+    except Exception:
+        pass
+    return DEFAULT_SETTINGS.copy()
+
+
+def apply_settings_to_session(settings: dict) -> None:
+    for key, value in settings.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def current_settings_from_session() -> dict:
+    return {
+        "trim_head": float(st.session_state.get("trim_head", DEFAULT_SETTINGS["trim_head"])),
+        "trim_tail": float(st.session_state.get("trim_tail", DEFAULT_SETTINGS["trim_tail"])),
+        "video_crop_top": int(st.session_state.get("video_crop_top", DEFAULT_SETTINGS["video_crop_top"])),
+        "video_crop_bottom": int(st.session_state.get("video_crop_bottom", DEFAULT_SETTINGS["video_crop_bottom"])),
+        "mute": bool(st.session_state.get("mute", DEFAULT_SETTINGS["mute"])),
+        "mirror": bool(st.session_state.get("mirror", DEFAULT_SETTINGS["mirror"])),
+        "brighten_video": bool(st.session_state.get("brighten_video", DEFAULT_SETTINGS["brighten_video"])),
+        "image_crop_top": int(st.session_state.get("image_crop_top", DEFAULT_SETTINGS["image_crop_top"])),
+        "image_crop_bottom": int(st.session_state.get("image_crop_bottom", DEFAULT_SETTINGS["image_crop_bottom"])),
+        "image_brighten": bool(st.session_state.get("image_brighten", DEFAULT_SETTINGS["image_brighten"])),
+        "image_contrast": bool(st.session_state.get("image_contrast", DEFAULT_SETTINGS["image_contrast"])),
+    }
+
+
+def save_current_settings() -> None:
+    SETTINGS_PATH.write_text(
+        json.dumps(current_settings_from_session(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def reset_settings_to_default() -> None:
+    for key, value in DEFAULT_SETTINGS.items():
+        st.session_state[key] = value
+    safe_delete(SETTINGS_PATH)
 
 
 def check_password() -> bool:
@@ -229,8 +296,36 @@ def make_zip(paths: list[Path]) -> bytes:
 if not check_password():
     st.stop()
 
+if "settings_loaded" not in st.session_state:
+    apply_settings_to_session(load_saved_settings())
+    st.session_state["settings_loaded"] = True
+
 st.title("🎬 Upload Media Editor")
 st.caption("영상과 이미지를 따로 또는 같이 업로드해서 처리합니다.")
+
+with st.expander("⚙️ 설정 저장", expanded=False):
+    st.caption("크롭값과 체크박스 옵션을 저장합니다. 저장된 값은 다음 접속 시부터 기본값으로 적용됩니다. 공유 앱에서는 모든 사용자가 같은 저장값을 사용합니다.")
+    col_save, col_reset = st.columns(2)
+    with col_save:
+        if st.button("현재 설정 저장", use_container_width=True):
+            save_current_settings()
+            st.session_state["settings_saved_message"] = True
+            st.rerun()
+    with col_reset:
+        if st.button("기본값 복원", use_container_width=True):
+            reset_settings_to_default()
+            st.session_state["settings_reset_message"] = True
+            st.rerun()
+
+if st.session_state.pop("settings_saved_message", False):
+    st.success("설정 저장 완료")
+
+if st.session_state.pop("settings_reset_message", False):
+    st.success("기본값으로 복원했습니다.")
+
+st.caption(
+    f"앱 내부 제한: 영상 {MAX_VIDEO_MB}MB 이하 / 이미지 {MAX_IMAGE_MB}MB 이하 / 한 번에 최대 {MAX_TOTAL_FILES}개"
+)
 
 uploaded_files = st.file_uploader(
     "영상/이미지 파일 업로드",
@@ -241,25 +336,25 @@ uploaded_files = st.file_uploader(
 with st.expander("📹 영상 옵션", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        trim_head = st.number_input("앞부분 자르기(초)", 0.0, 10.0, 0.5, 0.1)
-        video_crop_top = st.slider("영상 상단 크롭(%)", 0, 40, 15)
-        mute = st.checkbox("무음 처리", value=True)
+        trim_head = st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head")
+        video_crop_top = st.slider("영상 상단 크롭(%)", 0, 40, key="video_crop_top")
+        mute = st.checkbox("무음 처리", key="mute")
     with col2:
-        trim_tail = st.number_input("뒷부분 자르기(초)", 0.0, 10.0, 0.5, 0.1)
-        video_crop_bottom = st.slider("영상 하단 크롭(%)", 0, 40, 10)
-        mirror = st.checkbox("좌우 반전", value=False)
-    brighten_video = st.checkbox("영상 밝기/대비 약간 보정", value=False)
+        trim_tail = st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail")
+        video_crop_bottom = st.slider("영상 하단 크롭(%)", 0, 40, key="video_crop_bottom")
+        mirror = st.checkbox("좌우 반전", key="mirror")
+    brighten_video = st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video")
     if video_crop_top + video_crop_bottom >= 90:
         st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
-with st.expander("🖼️ 이미지 옵션", expanded=False):
+with st.expander("🖼️ 이미지 옵션", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        image_crop_top = st.slider("이미지 상단 크롭(%)", 0, 40, 10)
-        image_brighten = st.checkbox("이미지 밝기 약간 보정", value=True)
+        image_crop_top = st.slider("이미지 상단 크롭(%)", 0, 40, key="image_crop_top")
+        image_brighten = st.checkbox("이미지 밝기 약간 보정", key="image_brighten")
     with col2:
-        image_crop_bottom = st.slider("이미지 하단 크롭(%)", 0, 40, 5)
-        image_contrast = st.checkbox("이미지 대비 약간 보정", value=True)
+        image_crop_bottom = st.slider("이미지 하단 크롭(%)", 0, 40, key="image_crop_bottom")
+        image_contrast = st.checkbox("이미지 대비 약간 보정", key="image_contrast")
     if image_crop_top + image_crop_bottom >= 90:
         st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
