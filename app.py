@@ -149,92 +149,59 @@ def normalize_settings(settings: dict) -> dict:
     return merged
 
 
-def _write_file(settings: dict) -> None:
-    try:
-        SETTINGS_PATH.write_text(
-            json.dumps(settings, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _read_file() -> dict:
-    try:
-        if SETTINGS_PATH.exists():
-            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
-
-
-def _read_url_settings() -> dict:
-    result = {}
-    try:
-        for key in SETTING_KEYS:
-            qkey = _setting_query_key(key)
-            if qkey in st.query_params:
-                result[key] = _query_value_to_python(key, st.query_params.get(qkey))
-    except Exception:
-        pass
-    return result
-
-
-def _write_url_settings(settings: dict) -> None:
-    try:
-        for key, value in settings.items():
-            if key in SETTING_KEYS:
-                st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
-    except Exception:
-        pass
-
-
-def init_and_sync_settings() -> dict:
+def init_and_sync_settings() -> None:
     """
     매 re-run 시작 시 호출.
-    1) 이전 run의 위젯 값이 session_state에 남아있으면 캡처
-    2) 캡처한 값 + 기존 저장 값 병합 → 파일 저장
-    3) 위젯 키 초기화 (위젯 생성 전에 session_state에 넣어야 함)
+    Streamlit Cloud 대응: 파일 저장 없이 URL + session_state만 사용.
     """
-    # --- 1단계: 이전 run 위젯 값 캡처 (cleanup 전이라 아직 존재) ---
+    # --- 1. 이전 run의 위젯 값 캡처 (Streamlit cleanup 전) ---
     captured = {}
     for key in SETTING_KEYS:
         wk = widget_key(key)
         if wk in st.session_state:
             captured[key] = st.session_state[wk]
 
-    # --- 2단계: 저장된 설정 로드 (최초 1회) ---
-    if "_persisted_settings" not in st.session_state:
-        url_s = _read_url_settings()
-        file_s = _read_file()
-        merged = DEFAULT_SETTINGS.copy()
-        merged.update(file_s)
-        merged.update(url_s)
-        st.session_state["_persisted_settings"] = normalize_settings(merged)
+    # --- 2. 최초 로드: URL에서 설정 읽기 ---
+    if "_settings" not in st.session_state:
+        loaded = DEFAULT_SETTINGS.copy()
+        try:
+            for key in SETTING_KEYS:
+                qkey = _setting_query_key(key)
+                if qkey in st.query_params:
+                    loaded[key] = _query_value_to_python(key, st.query_params.get(qkey))
+        except Exception:
+            pass
+        st.session_state["_settings"] = normalize_settings(loaded)
 
-    # --- 3단계: 캡처된 위젯 값으로 업데이트 ---
-    current = dict(st.session_state["_persisted_settings"])
+    # --- 3. 캡처된 위젯 값으로 업데이트 ---
     if captured:
-        current.update(captured)
-        current = normalize_settings(current)
-        if current != st.session_state["_persisted_settings"]:
-            st.session_state["_persisted_settings"] = current
-            _write_file(current)
-            st.session_state["_settings_changed"] = True
+        updated = dict(st.session_state["_settings"])
+        updated.update(captured)
+        updated = normalize_settings(updated)
+        if updated != st.session_state["_settings"]:
+            st.session_state["_settings"] = updated
+            st.session_state["_need_url_sync"] = True
 
-    # --- 4단계: 위젯 키 초기화 (없는 것만) ---
-    for key, value in current.items():
+    # --- 4. 위젯 키 초기화 ---
+    for key, value in st.session_state["_settings"].items():
         wk = widget_key(key)
         if wk not in st.session_state:
             st.session_state[wk] = value
 
-    return current
-
 
 def current_settings() -> dict:
-    return normalize_settings(st.session_state.get("_persisted_settings", DEFAULT_SETTINGS.copy()))
+    return normalize_settings(st.session_state.get("_settings", DEFAULT_SETTINGS.copy()))
+
+
+def sync_url_if_needed() -> None:
+    """메인 플로우 끝에서 호출. 변경된 설정을 URL에 반영."""
+    if not st.session_state.pop("_need_url_sync", False):
+        return
+    try:
+        for key, value in st.session_state["_settings"].items():
+            st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
+    except Exception:
+        pass
 
 
 def check_password() -> bool:
@@ -507,9 +474,7 @@ elif option_mode == "이미지 옵션":
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
-if st.session_state.pop("_settings_changed", False):
-    st.success("설정 저장됨")
-    _write_url_settings(current_settings())
+sync_url_if_needed()
 
 settings = current_settings()
 
