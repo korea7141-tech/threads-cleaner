@@ -185,7 +185,13 @@ def init_settings() -> None:
 
 
 def current_settings() -> dict:
-    return normalize_settings(st.session_state.get("settings_data", DEFAULT_SETTINGS.copy()))
+    base = dict(st.session_state.get("settings_data", DEFAULT_SETTINGS.copy()))
+    # 위젯이 렌더링 중이면 위젯 값이 최신 → settings_data보다 우선
+    for key in SETTING_KEYS:
+        wkey = widget_key(key)
+        if wkey in st.session_state:
+            base[key] = st.session_state[wkey]
+    return normalize_settings(base)
 
 
 def write_settings(settings: dict) -> None:
@@ -487,7 +493,10 @@ elif option_mode == "이미지 옵션":
 if st.session_state.pop("settings_auto_saved_message", False):
     st.success("설정 자동 저장됨")
 
+# 옵션 패널이 닫혀도 위젯에서 변경된 값이 있으면 저장
 settings = current_settings()
+if settings != st.session_state.get("settings_data"):
+    write_settings(settings)
 
 st.markdown("---")
 
