@@ -185,8 +185,8 @@ def init_settings() -> None:
 
 
 def current_settings() -> dict:
+    """위젯 값이 있으면 위젯 우선, 없으면 settings_data 사용"""
     base = dict(st.session_state.get("settings_data", DEFAULT_SETTINGS.copy()))
-    # 위젯이 렌더링 중이면 위젯 값이 최신 → settings_data보다 우선
     for key in SETTING_KEYS:
         wkey = widget_key(key)
         if wkey in st.session_state:
@@ -206,18 +206,20 @@ def write_settings(settings: dict) -> None:
     except Exception:
         pass
 
-    try:
-        for key, value in settings.items():
-            st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
-    except Exception:
-        pass
 
-
-def save_setting_from_widget(key: str) -> None:
-    settings = current_settings()
-    settings[key] = st.session_state.get(widget_key(key), DEFAULT_SETTINGS[key])
-    write_settings(settings)
-    st.session_state["settings_auto_saved_message"] = True
+def sync_and_save() -> None:
+    """매 re-run마다 호출: 위젯 값 → settings_data → 파일 저장"""
+    current = current_settings()
+    saved = st.session_state.get("settings_data")
+    if current != saved:
+        write_settings(current)
+        st.session_state["settings_auto_saved_message"] = True
+        # URL 동기화는 메인 플로우에서만 (on_change 안에서 하면 re-run 유발)
+        try:
+            for key, value in current.items():
+                st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
+        except Exception:
+            pass
 
 
 def check_password() -> bool:
@@ -465,13 +467,13 @@ option_mode = st.selectbox(
 if option_mode == "영상 옵션":
     with st.container(border=True):
         st.subheader("📹 영상 옵션")
-        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_head"), on_change=save_setting_from_widget, args=("trim_head",))
-        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_tail"), on_change=save_setting_from_widget, args=("trim_tail",))
-        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_top"), on_change=save_setting_from_widget, args=("video_crop_top",))
-        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_bottom"), on_change=save_setting_from_widget, args=("video_crop_bottom",))
-        st.checkbox("영상 밝기/대비 약간 보정", key=widget_key("brighten_video"), on_change=save_setting_from_widget, args=("brighten_video",))
-        st.checkbox("좌우 반전", key=widget_key("mirror"), on_change=save_setting_from_widget, args=("mirror",))
-        st.checkbox("무음 처리", key=widget_key("mute"), on_change=save_setting_from_widget, args=("mute",))
+        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_head"))
+        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_tail"))
+        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_top"))
+        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_bottom"))
+        st.checkbox("영상 밝기/대비 약간 보정", key=widget_key("brighten_video"))
+        st.checkbox("좌우 반전", key=widget_key("mirror"))
+        st.checkbox("무음 처리", key=widget_key("mute"))
 
         s = current_settings()
         if s["video_crop_top"] + s["video_crop_bottom"] >= 90:
@@ -480,23 +482,22 @@ if option_mode == "영상 옵션":
 elif option_mode == "이미지 옵션":
     with st.container(border=True):
         st.subheader("🖼️ 이미지 옵션")
-        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_top"), on_change=save_setting_from_widget, args=("image_crop_top",))
-        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_bottom"), on_change=save_setting_from_widget, args=("image_crop_bottom",))
-        st.checkbox("이미지 밝기 약간 보정", key=widget_key("image_brighten"), on_change=save_setting_from_widget, args=("image_brighten",))
-        st.checkbox("이미지 보정", key=widget_key("image_contrast"), on_change=save_setting_from_widget, args=("image_contrast",))
-        st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"), on_change=save_setting_from_widget, args=("image_mirror",))
+        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_top"))
+        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_bottom"))
+        st.checkbox("이미지 밝기 약간 보정", key=widget_key("image_brighten"))
+        st.checkbox("이미지 보정", key=widget_key("image_contrast"))
+        st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"))
 
         s = current_settings()
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
+sync_and_save()
+
 if st.session_state.pop("settings_auto_saved_message", False):
     st.success("설정 자동 저장됨")
 
-# 옵션 패널이 닫혀도 위젯에서 변경된 값이 있으면 저장
 settings = current_settings()
-if settings != st.session_state.get("settings_data"):
-    write_settings(settings)
 
 st.markdown("---")
 
