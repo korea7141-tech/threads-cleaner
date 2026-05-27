@@ -41,6 +41,13 @@ BOOL_SETTING_KEYS = {"brighten_video", "mirror", "mute", "image_brighten", "imag
 INT_SETTING_KEYS = {"video_crop_top", "video_crop_bottom", "image_crop_top", "image_crop_bottom"}
 FLOAT_SETTING_KEYS = {"trim_head", "trim_tail"}
 
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _pw_hash(pwd: str) -> str:
+    return hashlib.sha256(pwd.encode("utf-8")).hexdigest()
+
 
 def _setting_query_key(key: str) -> str:
     return f"s_{key}"
@@ -66,12 +73,8 @@ def _python_value_to_query(value) -> str:
     return str(value)
 
 
-VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
-
-
-def _pw_hash(pwd: str) -> str:
-    return hashlib.sha256(pwd.encode("utf-8")).hexdigest()
+def widget_key(key: str) -> str:
+    return f"w_{key}"
 
 
 def cleanup_old_work_files() -> None:
@@ -131,7 +134,6 @@ def safe_delete(*paths: Path) -> None:
 def load_saved_settings() -> dict:
     merged = DEFAULT_SETTINGS.copy()
 
-    # 1순위: URL에 저장된 설정값
     try:
         for key in SETTING_KEYS:
             qkey = _setting_query_key(key)
@@ -140,7 +142,6 @@ def load_saved_settings() -> dict:
     except Exception:
         pass
 
-    # 2순위: 서버 임시 저장 파일
     try:
         if SETTINGS_PATH.exists():
             data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
@@ -155,55 +156,62 @@ def load_saved_settings() -> dict:
     return merged
 
 
-def apply_settings_to_session(settings: dict) -> None:
-    for key, value in settings.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+def normalize_settings(settings: dict) -> dict:
+    merged = DEFAULT_SETTINGS.copy()
+    for key in SETTING_KEYS:
+        if key in settings:
+            val = settings[key]
+            try:
+                if key in BOOL_SETTING_KEYS:
+                    val = bool(val)
+                elif key in INT_SETTING_KEYS:
+                    val = int(val)
+                elif key in FLOAT_SETTING_KEYS:
+                    val = float(val)
+            except Exception:
+                val = DEFAULT_SETTINGS[key]
+            merged[key] = val
+    return merged
 
 
-def current_settings_from_session() -> dict:
-    return {
-        "trim_head": float(st.session_state.get("trim_head", DEFAULT_SETTINGS["trim_head"])),
-        "trim_tail": float(st.session_state.get("trim_tail", DEFAULT_SETTINGS["trim_tail"])),
-        "video_crop_top": int(st.session_state.get("video_crop_top", DEFAULT_SETTINGS["video_crop_top"])),
-        "video_crop_bottom": int(st.session_state.get("video_crop_bottom", DEFAULT_SETTINGS["video_crop_bottom"])),
-        "brighten_video": bool(st.session_state.get("brighten_video", DEFAULT_SETTINGS["brighten_video"])),
-        "mirror": bool(st.session_state.get("mirror", DEFAULT_SETTINGS["mirror"])),
-        "mute": bool(st.session_state.get("mute", DEFAULT_SETTINGS["mute"])),
-        "image_crop_top": int(st.session_state.get("image_crop_top", DEFAULT_SETTINGS["image_crop_top"])),
-        "image_crop_bottom": int(st.session_state.get("image_crop_bottom", DEFAULT_SETTINGS["image_crop_bottom"])),
-        "image_brighten": bool(st.session_state.get("image_brighten", DEFAULT_SETTINGS["image_brighten"])),
-        "image_contrast": bool(st.session_state.get("image_contrast", DEFAULT_SETTINGS["image_contrast"])),
-        "image_mirror": bool(st.session_state.get("image_mirror", DEFAULT_SETTINGS["image_mirror"])),
-    }
+def init_settings() -> None:
+    if "settings_data" not in st.session_state:
+        st.session_state["settings_data"] = normalize_settings(load_saved_settings())
+
+    for key, value in st.session_state["settings_data"].items():
+        wkey = widget_key(key)
+        if wkey not in st.session_state:
+            st.session_state[wkey] = value
 
 
-def save_settings_if_changed() -> None:
-    current = current_settings_from_session()
-    last = st.session_state.get("_last_auto_saved_settings")
+def current_settings() -> dict:
+    return normalize_settings(st.session_state.get("settings_data", DEFAULT_SETTINGS.copy()))
 
-    # 서버 임시 파일 저장
-    if last != current:
+
+def write_settings(settings: dict) -> None:
+    settings = normalize_settings(settings)
+    st.session_state["settings_data"] = settings
+
+    try:
         SETTINGS_PATH.write_text(
-            json.dumps(current, ensure_ascii=False, indent=2),
+            json.dumps(settings, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        st.session_state["_last_auto_saved_settings"] = current.copy()
-        st.session_state["settings_auto_saved_message"] = True
-        st.session_state["_url_sync_needed"] = True
-
-
-def sync_settings_to_url() -> None:
-    """메인 플로우에서만 호출 — on_change 안에서 호출하면 re-run 발생"""
-    if not st.session_state.get("_url_sync_needed"):
-        return
-    try:
-        current = current_settings_from_session()
-        for key, value in current.items():
-            st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
-        st.session_state["_url_sync_needed"] = False
     except Exception:
         pass
+
+    try:
+        for key, value in settings.items():
+            st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
+    except Exception:
+        pass
+
+
+def save_setting_from_widget(key: str) -> None:
+    settings = current_settings()
+    settings[key] = st.session_state.get(widget_key(key), DEFAULT_SETTINGS[key])
+    write_settings(settings)
+    st.session_state["settings_auto_saved_message"] = True
 
 
 def check_password() -> bool:
@@ -212,7 +220,6 @@ def check_password() -> bool:
 
     token = _pw_hash(APP_PASSWORD)
 
-    # URL 토큰 자동 로그인: 모바일 홈화면/북마크 유지용
     if not st.session_state["password_correct"]:
         try:
             auth_token = st.query_params.get("auth")
@@ -401,10 +408,7 @@ def make_zip(paths: list[Path]) -> bytes:
 if not check_password():
     st.stop()
 
-if "settings_loaded" not in st.session_state:
-    apply_settings_to_session(load_saved_settings())
-    st.session_state["settings_loaded"] = True
-st.session_state["_last_auto_saved_settings"] = current_settings_from_session().copy()
+init_settings()
 
 st.title("🧺 쓰레드 세탁기")
 st.caption("영상과 이미지를 업로드해서 간단히 정리합니다.")
@@ -455,38 +459,35 @@ option_mode = st.selectbox(
 if option_mode == "영상 옵션":
     with st.container(border=True):
         st.subheader("📹 영상 옵션")
-        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_head", on_change=save_settings_if_changed)
-        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key="trim_tail", on_change=save_settings_if_changed)
-        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_top", on_change=save_settings_if_changed)
-        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key="video_crop_bottom", on_change=save_settings_if_changed)
-        st.checkbox("영상 밝기/대비 약간 보정", key="brighten_video", on_change=save_settings_if_changed)
-        st.checkbox("좌우 반전", key="mirror", on_change=save_settings_if_changed)
-        st.checkbox("무음 처리", key="mute", on_change=save_settings_if_changed)
+        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_head"), on_change=save_setting_from_widget, args=("trim_head",))
+        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_tail"), on_change=save_setting_from_widget, args=("trim_tail",))
+        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_top"), on_change=save_setting_from_widget, args=("video_crop_top",))
+        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_bottom"), on_change=save_setting_from_widget, args=("video_crop_bottom",))
+        st.checkbox("영상 밝기/대비 약간 보정", key=widget_key("brighten_video"), on_change=save_setting_from_widget, args=("brighten_video",))
+        st.checkbox("좌우 반전", key=widget_key("mirror"), on_change=save_setting_from_widget, args=("mirror",))
+        st.checkbox("무음 처리", key=widget_key("mute"), on_change=save_setting_from_widget, args=("mute",))
 
-        s = current_settings_from_session()
+        s = current_settings()
         if s["video_crop_top"] + s["video_crop_bottom"] >= 90:
             st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
 elif option_mode == "이미지 옵션":
     with st.container(border=True):
         st.subheader("🖼️ 이미지 옵션")
-        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_top", on_change=save_settings_if_changed)
-        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key="image_crop_bottom", on_change=save_settings_if_changed)
-        st.checkbox("이미지 밝기 약간 보정", key="image_brighten", on_change=save_settings_if_changed)
-        st.checkbox("이미지 보정", key="image_contrast", on_change=save_settings_if_changed)
-        st.checkbox("이미지 좌우 반전", key="image_mirror", on_change=save_settings_if_changed)
+        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_top"), on_change=save_setting_from_widget, args=("image_crop_top",))
+        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_bottom"), on_change=save_setting_from_widget, args=("image_crop_bottom",))
+        st.checkbox("이미지 밝기 약간 보정", key=widget_key("image_brighten"), on_change=save_setting_from_widget, args=("image_brighten",))
+        st.checkbox("이미지 보정", key=widget_key("image_contrast"), on_change=save_setting_from_widget, args=("image_contrast",))
+        st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"), on_change=save_setting_from_widget, args=("image_mirror",))
 
-        s = current_settings_from_session()
+        s = current_settings()
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
-
-save_settings_if_changed()
-sync_settings_to_url()
 
 if st.session_state.pop("settings_auto_saved_message", False):
     st.success("설정 자동 저장됨")
 
-settings = current_settings_from_session()
+settings = current_settings()
 
 st.markdown("---")
 
