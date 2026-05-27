@@ -149,59 +149,25 @@ def normalize_settings(settings: dict) -> dict:
     return merged
 
 
-def init_and_sync_settings() -> None:
-    """
-    매 re-run 시작 시 호출.
-    Streamlit Cloud 대응: 파일 저장 없이 URL + session_state만 사용.
-    """
-    # --- 1. 이전 run의 위젯 값 캡처 (Streamlit cleanup 전) ---
-    captured = {}
+def init_settings() -> None:
+    """최초 1회: URL 파라미터에서 설정 로드 → 위젯 기본값 설정"""
+    if "_settings_inited" in st.session_state:
+        return
+    st.session_state["_settings_inited"] = True
+
     for key in SETTING_KEYS:
         wk = widget_key(key)
-        if wk in st.session_state:
-            captured[key] = st.session_state[wk]
-
-    # --- 2. 최초 로드: URL에서 설정 읽기 ---
-    if "_settings" not in st.session_state:
-        loaded = DEFAULT_SETTINGS.copy()
-        try:
-            for key in SETTING_KEYS:
-                qkey = _setting_query_key(key)
-                if qkey in st.query_params:
-                    loaded[key] = _query_value_to_python(key, st.query_params.get(qkey))
-        except Exception:
-            pass
-        st.session_state["_settings"] = normalize_settings(loaded)
-
-    # --- 3. 캡처된 위젯 값으로 업데이트 ---
-    if captured:
-        updated = dict(st.session_state["_settings"])
-        updated.update(captured)
-        updated = normalize_settings(updated)
-        if updated != st.session_state["_settings"]:
-            st.session_state["_settings"] = updated
-            st.session_state["_need_url_sync"] = True
-
-    # --- 4. 위젯 키 초기화 ---
-    for key, value in st.session_state["_settings"].items():
-        wk = widget_key(key)
         if wk not in st.session_state:
-            st.session_state[wk] = value
-
-
-def current_settings() -> dict:
-    return normalize_settings(st.session_state.get("_settings", DEFAULT_SETTINGS.copy()))
-
-
-def sync_url_if_needed() -> None:
-    """메인 플로우 끝에서 호출. 변경된 설정을 URL에 반영."""
-    if not st.session_state.pop("_need_url_sync", False):
-        return
-    try:
-        for key, value in st.session_state["_settings"].items():
-            st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
-    except Exception:
-        pass
+            # URL에서 읽기
+            qkey = _setting_query_key(key)
+            try:
+                if qkey in st.query_params:
+                    st.session_state[wk] = _query_value_to_python(key, st.query_params.get(qkey))
+                    continue
+            except Exception:
+                pass
+            # 기본값
+            st.session_state[wk] = DEFAULT_SETTINGS[key]
 
 
 def check_password() -> bool:
@@ -398,7 +364,7 @@ def make_zip(paths: list[Path]) -> bytes:
 if not check_password():
     st.stop()
 
-init_and_sync_settings()
+init_settings()
 
 st.title("🧺 쓰레드 세탁기")
 st.caption("영상과 이미지를 업로드해서 간단히 정리합니다.")
@@ -439,44 +405,28 @@ else:
 
 st.markdown("---")
 
-option_mode = st.selectbox(
-    "편집 옵션 열기",
-    ["옵션 숨김", "영상 옵션", "이미지 옵션"],
-    index=0,
-    key="option_mode",
-)
+with st.expander("📹 영상 옵션", expanded=False):
+    st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_head"))
+    st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_tail"))
+    st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_top"))
+    st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_bottom"))
+    st.checkbox("영상 밝기/대비 약간 보정", key=widget_key("brighten_video"))
+    st.checkbox("좌우 반전", key=widget_key("mirror"))
+    st.checkbox("무음 처리", key=widget_key("mute"))
 
-if option_mode == "영상 옵션":
-    with st.container(border=True):
-        st.subheader("📹 영상 옵션")
-        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_head"))
-        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_tail"))
-        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_top"))
-        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_bottom"))
-        st.checkbox("영상 밝기/대비 약간 보정", key=widget_key("brighten_video"))
-        st.checkbox("좌우 반전", key=widget_key("mirror"))
-        st.checkbox("무음 처리", key=widget_key("mute"))
+with st.expander("🖼️ 이미지 옵션", expanded=False):
+    st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_top"))
+    st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_bottom"))
+    st.checkbox("이미지 밝기 약간 보정", key=widget_key("image_brighten"))
+    st.checkbox("이미지 보정", key=widget_key("image_contrast"))
+    st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"))
 
-        s = current_settings()
-        if s["video_crop_top"] + s["video_crop_bottom"] >= 90:
-            st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
-
-elif option_mode == "이미지 옵션":
-    with st.container(border=True):
-        st.subheader("🖼️ 이미지 옵션")
-        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_top"))
-        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_bottom"))
-        st.checkbox("이미지 밝기 약간 보정", key=widget_key("image_brighten"))
-        st.checkbox("이미지 보정", key=widget_key("image_contrast"))
-        st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"))
-
-        s = current_settings()
-        if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
-            st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
-
-sync_url_if_needed()
-
-settings = current_settings()
+# 위젯에서 직접 설정 읽기 (expander 안 위젯은 항상 렌더링됨)
+settings = {}
+for key in SETTING_KEYS:
+    wk = widget_key(key)
+    settings[key] = st.session_state.get(wk, DEFAULT_SETTINGS[key])
+settings = normalize_settings(settings)
 
 st.markdown("---")
 
