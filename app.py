@@ -207,11 +207,21 @@ def write_settings(settings: dict) -> None:
         pass
 
 
-def save_setting_from_widget(key: str) -> None:
+def sync_visible_settings(keys: list[str]) -> None:
     settings = current_settings()
-    settings[key] = st.session_state.get(widget_key(key), DEFAULT_SETTINGS[key])
-    write_settings(settings)
-    st.session_state["settings_auto_saved_message"] = True
+    changed = False
+
+    for key in keys:
+        wkey = widget_key(key)
+        if wkey in st.session_state:
+            new_value = st.session_state[wkey]
+            if settings.get(key) != new_value:
+                settings[key] = new_value
+                changed = True
+
+    if changed:
+        write_settings(settings)
+        st.session_state["settings_auto_saved_message"] = True
 
 
 def check_password() -> bool:
@@ -467,13 +477,15 @@ if option_mode == "영상 옵션":
         st.checkbox("좌우 반전", key=widget_key("mirror"))
         st.checkbox("무음 처리", key=widget_key("mute"))
 
-        if st.button("💾 영상 옵션 저장", key="save_video_opts"):
-            for key in SETTING_KEYS:
-                wk = widget_key(key)
-                if wk in st.session_state:
-                    st.session_state["settings_data"][key] = st.session_state[wk]
-            write_settings(st.session_state["settings_data"])
-            st.success("저장 완료")
+        sync_visible_settings([
+            "trim_head",
+            "trim_tail",
+            "video_crop_top",
+            "video_crop_bottom",
+            "brighten_video",
+            "mirror",
+            "mute",
+        ])
 
         s = current_settings()
         if s["video_crop_top"] + s["video_crop_bottom"] >= 90:
@@ -488,13 +500,13 @@ elif option_mode == "이미지 옵션":
         st.checkbox("이미지 보정", key=widget_key("image_contrast"))
         st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"))
 
-        if st.button("💾 이미지 옵션 저장", key="save_image_opts"):
-            for key in SETTING_KEYS:
-                wk = widget_key(key)
-                if wk in st.session_state:
-                    st.session_state["settings_data"][key] = st.session_state[wk]
-            write_settings(st.session_state["settings_data"])
-            st.success("저장 완료")
+        sync_visible_settings([
+            "image_crop_top",
+            "image_crop_bottom",
+            "image_brighten",
+            "image_contrast",
+            "image_mirror",
+        ])
 
         s = current_settings()
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
