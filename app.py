@@ -131,31 +131,6 @@ def safe_delete(*paths: Path) -> None:
             pass
 
 
-def load_saved_settings() -> dict:
-    merged = DEFAULT_SETTINGS.copy()
-
-    try:
-        for key in SETTING_KEYS:
-            qkey = _setting_query_key(key)
-            if qkey in st.query_params:
-                merged[key] = _query_value_to_python(key, st.query_params.get(qkey))
-    except Exception:
-        pass
-
-    try:
-        if SETTINGS_PATH.exists():
-            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                for key in SETTING_KEYS:
-                    qkey = _setting_query_key(key)
-                    if qkey not in st.query_params and key in data:
-                        merged[key] = data[key]
-    except Exception:
-        pass
-
-    return merged
-
-
 def normalize_settings(settings: dict) -> dict:
     merged = DEFAULT_SETTINGS.copy()
     for key in SETTING_KEYS:
@@ -174,30 +149,7 @@ def normalize_settings(settings: dict) -> dict:
     return merged
 
 
-def init_settings() -> None:
-    if "settings_data" not in st.session_state:
-        st.session_state["settings_data"] = normalize_settings(load_saved_settings())
-
-    for key, value in st.session_state["settings_data"].items():
-        wkey = widget_key(key)
-        if wkey not in st.session_state:
-            st.session_state[wkey] = value
-
-
-def current_settings() -> dict:
-    """위젯 값이 있으면 위젯 우선, 없으면 settings_data 사용"""
-    base = dict(st.session_state.get("settings_data", DEFAULT_SETTINGS.copy()))
-    for key in SETTING_KEYS:
-        wkey = widget_key(key)
-        if wkey in st.session_state:
-            base[key] = st.session_state[wkey]
-    return normalize_settings(base)
-
-
-def write_settings(settings: dict) -> None:
-    settings = normalize_settings(settings)
-    st.session_state["settings_data"] = settings
-
+def _write_file(settings: dict) -> None:
     try:
         SETTINGS_PATH.write_text(
             json.dumps(settings, ensure_ascii=False, indent=2),
@@ -207,19 +159,82 @@ def write_settings(settings: dict) -> None:
         pass
 
 
-def sync_and_save() -> None:
-    """매 re-run마다 호출: 위젯 값 → settings_data → 파일 저장"""
-    current = current_settings()
-    saved = st.session_state.get("settings_data")
-    if current != saved:
-        write_settings(current)
-        st.session_state["settings_auto_saved_message"] = True
-        # URL 동기화는 메인 플로우에서만 (on_change 안에서 하면 re-run 유발)
-        try:
-            for key, value in current.items():
+def _read_file() -> dict:
+    try:
+        if SETTINGS_PATH.exists():
+            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _read_url_settings() -> dict:
+    result = {}
+    try:
+        for key in SETTING_KEYS:
+            qkey = _setting_query_key(key)
+            if qkey in st.query_params:
+                result[key] = _query_value_to_python(key, st.query_params.get(qkey))
+    except Exception:
+        pass
+    return result
+
+
+def _write_url_settings(settings: dict) -> None:
+    try:
+        for key, value in settings.items():
+            if key in SETTING_KEYS:
                 st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
-        except Exception:
-            pass
+    except Exception:
+        pass
+
+
+def init_and_sync_settings() -> dict:
+    """
+    매 re-run 시작 시 호출.
+    1) 이전 run의 위젯 값이 session_state에 남아있으면 캡처
+    2) 캡처한 값 + 기존 저장 값 병합 → 파일 저장
+    3) 위젯 키 초기화 (위젯 생성 전에 session_state에 넣어야 함)
+    """
+    # --- 1단계: 이전 run 위젯 값 캡처 (cleanup 전이라 아직 존재) ---
+    captured = {}
+    for key in SETTING_KEYS:
+        wk = widget_key(key)
+        if wk in st.session_state:
+            captured[key] = st.session_state[wk]
+
+    # --- 2단계: 저장된 설정 로드 (최초 1회) ---
+    if "_persisted_settings" not in st.session_state:
+        url_s = _read_url_settings()
+        file_s = _read_file()
+        merged = DEFAULT_SETTINGS.copy()
+        merged.update(file_s)
+        merged.update(url_s)
+        st.session_state["_persisted_settings"] = normalize_settings(merged)
+
+    # --- 3단계: 캡처된 위젯 값으로 업데이트 ---
+    current = dict(st.session_state["_persisted_settings"])
+    if captured:
+        current.update(captured)
+        current = normalize_settings(current)
+        if current != st.session_state["_persisted_settings"]:
+            st.session_state["_persisted_settings"] = current
+            _write_file(current)
+            st.session_state["_settings_changed"] = True
+
+    # --- 4단계: 위젯 키 초기화 (없는 것만) ---
+    for key, value in current.items():
+        wk = widget_key(key)
+        if wk not in st.session_state:
+            st.session_state[wk] = value
+
+    return current
+
+
+def current_settings() -> dict:
+    return normalize_settings(st.session_state.get("_persisted_settings", DEFAULT_SETTINGS.copy()))
 
 
 def check_password() -> bool:
@@ -416,7 +431,7 @@ def make_zip(paths: list[Path]) -> bytes:
 if not check_password():
     st.stop()
 
-init_settings()
+init_and_sync_settings()
 
 st.title("🧺 쓰레드 세탁기")
 st.caption("영상과 이미지를 업로드해서 간단히 정리합니다.")
@@ -492,10 +507,9 @@ elif option_mode == "이미지 옵션":
         if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
             st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
 
-sync_and_save()
-
-if st.session_state.pop("settings_auto_saved_message", False):
-    st.success("설정 자동 저장됨")
+if st.session_state.pop("_settings_changed", False):
+    st.success("설정 저장됨")
+    _write_url_settings(current_settings())
 
 settings = current_settings()
 
