@@ -131,6 +131,31 @@ def safe_delete(*paths: Path) -> None:
             pass
 
 
+def load_saved_settings() -> dict:
+    merged = DEFAULT_SETTINGS.copy()
+
+    try:
+        for key in SETTING_KEYS:
+            qkey = _setting_query_key(key)
+            if qkey in st.query_params:
+                merged[key] = _query_value_to_python(key, st.query_params.get(qkey))
+    except Exception:
+        pass
+
+    try:
+        if SETTINGS_PATH.exists():
+            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for key in SETTING_KEYS:
+                    qkey = _setting_query_key(key)
+                    if qkey not in st.query_params and key in data:
+                        merged[key] = data[key]
+    except Exception:
+        pass
+
+    return merged
+
+
 def normalize_settings(settings: dict) -> dict:
     merged = DEFAULT_SETTINGS.copy()
     for key in SETTING_KEYS:
@@ -150,24 +175,43 @@ def normalize_settings(settings: dict) -> dict:
 
 
 def init_settings() -> None:
-    """최초 1회: URL 파라미터에서 설정 로드 → 위젯 기본값 설정"""
-    if "_settings_inited" in st.session_state:
-        return
-    st.session_state["_settings_inited"] = True
+    if "settings_data" not in st.session_state:
+        st.session_state["settings_data"] = normalize_settings(load_saved_settings())
 
-    for key in SETTING_KEYS:
-        wk = widget_key(key)
-        if wk not in st.session_state:
-            # URL에서 읽기
-            qkey = _setting_query_key(key)
-            try:
-                if qkey in st.query_params:
-                    st.session_state[wk] = _query_value_to_python(key, st.query_params.get(qkey))
-                    continue
-            except Exception:
-                pass
-            # 기본값
-            st.session_state[wk] = DEFAULT_SETTINGS[key]
+    for key, value in st.session_state["settings_data"].items():
+        wkey = widget_key(key)
+        if wkey not in st.session_state:
+            st.session_state[wkey] = value
+
+
+def current_settings() -> dict:
+    return normalize_settings(st.session_state.get("settings_data", DEFAULT_SETTINGS.copy()))
+
+
+def write_settings(settings: dict) -> None:
+    settings = normalize_settings(settings)
+    st.session_state["settings_data"] = settings
+
+    try:
+        SETTINGS_PATH.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    try:
+        for key, value in settings.items():
+            st.query_params[_setting_query_key(key)] = _python_value_to_query(value)
+    except Exception:
+        pass
+
+
+def save_setting_from_widget(key: str) -> None:
+    settings = current_settings()
+    settings[key] = st.session_state.get(widget_key(key), DEFAULT_SETTINGS[key])
+    write_settings(settings)
+    st.session_state["settings_auto_saved_message"] = True
 
 
 def check_password() -> bool:
@@ -405,28 +449,61 @@ else:
 
 st.markdown("---")
 
-with st.expander("📹 영상 옵션", expanded=False):
-    st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_head"))
-    st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_tail"))
-    st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_top"))
-    st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_bottom"))
-    st.checkbox("영상 밝기/대비 약간 보정", key=widget_key("brighten_video"))
-    st.checkbox("좌우 반전", key=widget_key("mirror"))
-    st.checkbox("무음 처리", key=widget_key("mute"))
+option_mode = st.selectbox(
+    "편집 옵션 열기",
+    ["옵션 숨김", "영상 옵션", "이미지 옵션"],
+    index=0,
+    key="option_mode",
+)
 
-with st.expander("🖼️ 이미지 옵션", expanded=False):
-    st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_top"))
-    st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_bottom"))
-    st.checkbox("이미지 밝기 약간 보정", key=widget_key("image_brighten"))
-    st.checkbox("이미지 보정", key=widget_key("image_contrast"))
-    st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"))
+if option_mode == "영상 옵션":
+    with st.container(border=True):
+        st.subheader("📹 영상 옵션")
+        st.number_input("앞부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_head"))
+        st.number_input("뒷부분 자르기(초)", 0.0, 10.0, step=0.1, key=widget_key("trim_tail"))
+        st.number_input("영상 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_top"))
+        st.number_input("영상 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("video_crop_bottom"))
+        st.checkbox("영상 밝기/대비 약간 보정", key=widget_key("brighten_video"))
+        st.checkbox("좌우 반전", key=widget_key("mirror"))
+        st.checkbox("무음 처리", key=widget_key("mute"))
 
-# 위젯에서 직접 설정 읽기 (expander 안 위젯은 항상 렌더링됨)
-settings = {}
-for key in SETTING_KEYS:
-    wk = widget_key(key)
-    settings[key] = st.session_state.get(wk, DEFAULT_SETTINGS[key])
-settings = normalize_settings(settings)
+        if st.button("💾 영상 옵션 저장", key="save_video_opts"):
+            for key in SETTING_KEYS:
+                wk = widget_key(key)
+                if wk in st.session_state:
+                    st.session_state["settings_data"][key] = st.session_state[wk]
+            write_settings(st.session_state["settings_data"])
+            st.success("저장 완료")
+
+        s = current_settings()
+        if s["video_crop_top"] + s["video_crop_bottom"] >= 90:
+            st.warning("영상 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+
+elif option_mode == "이미지 옵션":
+    with st.container(border=True):
+        st.subheader("🖼️ 이미지 옵션")
+        st.number_input("이미지 상단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_top"))
+        st.number_input("이미지 하단 크롭(%)", min_value=0, max_value=40, step=1, key=widget_key("image_crop_bottom"))
+        st.checkbox("이미지 밝기 약간 보정", key=widget_key("image_brighten"))
+        st.checkbox("이미지 보정", key=widget_key("image_contrast"))
+        st.checkbox("이미지 좌우 반전", key=widget_key("image_mirror"))
+
+        if st.button("💾 이미지 옵션 저장", key="save_image_opts"):
+            for key in SETTING_KEYS:
+                wk = widget_key(key)
+                if wk in st.session_state:
+                    st.session_state["settings_data"][key] = st.session_state[wk]
+            write_settings(st.session_state["settings_data"])
+            st.success("저장 완료")
+
+        s = current_settings()
+        if s["image_crop_top"] + s["image_crop_bottom"] >= 90:
+            st.warning("이미지 크롭 합계가 너무 큽니다. 합계 90% 미만 권장.")
+
+if st.session_state.pop("settings_auto_saved_message", False):
+    st.success("설정 자동 저장됨")
+
+settings = current_settings()
 
 st.markdown("---")
 
